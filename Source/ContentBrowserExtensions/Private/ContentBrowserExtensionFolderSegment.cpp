@@ -3,19 +3,35 @@
 #include "ContentBrowserExtensionFolderSegment.h"
 #include "ContentBrowserExtensionsSanitize.h"
 
-FContentBrowserExtensionFolderSegment FContentBrowserExtensionFolderSegment::FromDisplayName(const FString& InDisplayName)
+namespace UE::ContentBrowserExtensions::Private
 {
-	FContentBrowserExtensionFolderSegment Out;
-	Out.DisplayName = InDisplayName;
-
-	// Sanitize as a single segment by wrapping in a leading slash (so the path-aware
-	// sanitizer treats the input as a one-segment path), then strip the slash back.
-	FString Sanitized = UE::ContentBrowserExtensions::SanitizeForPackagePath(FString(TEXT("/")) + InDisplayName);
-	if (Sanitized.StartsWith(TEXT("/")))
+	/**
+	 * Sanitize a single folder-segment string by wrapping in a leading slash (so the
+	 * path-aware SanitizeForPackagePath treats the input as a one-segment path),
+	 * running the sanitizer, then stripping the slash back off.
+	 *
+	 * Idempotent: passing an already-sanitized PathName through this returns the
+	 * same string unchanged (mixed-case identifiers are preserved by the sanitizer).
+	 */
+	static FString SanitizeSegment(const FString& InSegment)
 	{
-		Sanitized.RemoveAt(0);
+		FString Sanitized = SanitizeForPackagePath(FString(TEXT("/")) + InSegment);
+		if (Sanitized.StartsWith(TEXT("/")))
+		{
+			Sanitized.RemoveAt(0);
+		}
+		return Sanitized;
 	}
-	Out.PathName = MoveTemp(Sanitized);
+}
 
-	return Out;
+FContentBrowserExtensionFolderSegment::FContentBrowserExtensionFolderSegment(const FString& InPathName)
+{
+	PathName = UE::ContentBrowserExtensions::Private::SanitizeSegment(InPathName);
+	DisplayName = PathName;
+}
+
+FContentBrowserExtensionFolderSegment::FContentBrowserExtensionFolderSegment(const FString& InPathName, const FString& InDisplayName)
+{
+	PathName = UE::ContentBrowserExtensions::Private::SanitizeSegment(InPathName);
+	DisplayName = InDisplayName;
 }

@@ -55,28 +55,53 @@ FString UE::ContentBrowserExtensions::SanitizeForPackagePath(const FString& InPa
 				continue;
 			}
 
-			// PascalCase: capitalize first letter, lowercase the rest.
-			// Exception: short all-uppercase words (<=3 chars, e.g. "II", "IV") stay as-is.
-			bool bAllUpper = true;
+			// Case policy:
+			//   - Mixed-case words (have BOTH upper and lower alpha): preserved verbatim.
+			//     Treated as intentional PascalCase / camelCase by the consumer; do NOT
+			//     mangle. Makes the sanitizer idempotent on already-cased identifiers
+			//     (e.g. "ThirdParty" -> "ThirdParty", not "Thirdparty").
+			//   - Short all-uppercase tokens (<=3 chars, e.g. "II", "IV"): preserved.
+			//   - Otherwise (all-upper >3 chars, all-lower, or alpha-less): title-case —
+			//     uppercase the first alpha character, lowercase the rest. Non-alpha
+			//     characters (digits, _, -, .) ride along unchanged.
+			bool bHasUpperAlpha = false;
+			bool bHasLowerAlpha = false;
 			for (TCHAR Ch : CleanWord)
 			{
-				if (FChar::IsAlpha(Ch) && !FChar::IsUpper(Ch))
+				if (FChar::IsAlpha(Ch))
 				{
-					bAllUpper = false;
-					break;
+					if (FChar::IsUpper(Ch)) { bHasUpperAlpha = true; }
+					else                    { bHasLowerAlpha = true; }
 				}
 			}
+			const bool bMixedCase = bHasUpperAlpha && bHasLowerAlpha;
+			const bool bAllUpper  = bHasUpperAlpha && !bHasLowerAlpha;
 
-			if (bAllUpper && CleanWord.Len() <= 3)
+			if (bMixedCase || (bAllUpper && CleanWord.Len() <= 3))
 			{
 				PascalSeg += CleanWord;
 			}
 			else
 			{
-				PascalSeg.AppendChar(FChar::ToUpper(CleanWord[0]));
-				for (int32 i = 1; i < CleanWord.Len(); ++i)
+				bool bFirstAlphaSeen = false;
+				for (TCHAR Ch : CleanWord)
 				{
-					PascalSeg.AppendChar(FChar::ToLower(CleanWord[i]));
+					if (FChar::IsAlpha(Ch))
+					{
+						if (!bFirstAlphaSeen)
+						{
+							PascalSeg.AppendChar(FChar::ToUpper(Ch));
+							bFirstAlphaSeen = true;
+						}
+						else
+						{
+							PascalSeg.AppendChar(FChar::ToLower(Ch));
+						}
+					}
+					else
+					{
+						PascalSeg.AppendChar(Ch);
+					}
 				}
 			}
 		}
