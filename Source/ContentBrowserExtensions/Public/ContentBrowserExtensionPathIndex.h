@@ -21,8 +21,9 @@
  * Default sanitizer; consumers may override by pre-sanitizing the mount root before
  * passing it to UContentBrowserExtensionDataSource::InitializeWithAssets.
  *
- * Defined in ContentBrowserExtensionsSanitize.h. Forward-declared at use sites; this
- * header pulls in the declaration via the BuildFromFlatList implementation in the .cpp.
+ * Sanitization is provided by UContentBrowserExtensionsStatics::SanitizeForPackagePath
+ * (see ContentBrowserExtensionsStatics.h). No separate ContentBrowserExtensionsSanitize.h
+ * header exists.
  */
 
 /**

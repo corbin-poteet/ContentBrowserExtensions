@@ -41,14 +41,26 @@ static FName StripAllPrefix(const FName InPath)
 
 /**
  * Walks the path components of `Mount` strictly under `PathRoot`, emitting each
- * accumulated ancestor path (root-to-leaf) including `Mount` itself. Sink returns
- * false to stop early (e.g. to emit only the first segment, or to stop before Mount).
+ * accumulated ancestor path root-to-leaf (the FINAL emission is `Mount` itself).
  *
- * Built on `FPathViews::TryMakeChildPathRelativeTo` (boundary-aware parent check)
- * + `FPathViews::SplitFirstComponent` (per-segment iteration). Replaces three
- * hand-rolled `Mount.Find("/", FromStart, SearchFrom)` walks (T5).
+ * Termination is controlled by the sink's bool return — return false to stop
+ * early. The helper does NOT special-case Mount inclusion; callers that want
+ * to exclude Mount must filter it in the sink (see BuildRootPathVirtualTree).
  *
- * Examples:
+ * Three callsites with three shapes:
+ *   1. BuildRootPathVirtualTree (~:188): PathRoot="/", emit ancestors strictly
+ *      between "/" and Mount; sink returns false on Mount to stop before it.
+ *   2. EnumerateItemsMatchingFilter recursive (~:368): PathRoot=filter root,
+ *      emit ancestors between PathRoot and Mount; sink returns false on Mount
+ *      because the FolderPaths loop emits Mount itself.
+ *   3. EnumerateItemsMatchingFilter non-recursive (~:314): PathRoot=ancestor
+ *      of Mount, want only the IMMEDIATE child segment; sink returns false
+ *      after the first emission.
+ *
+ * Built on `FPathViews::TryMakeChildPathRelativeTo` (boundary-aware parent
+ * check) + `FPathViews::SplitFirstComponent` (per-segment iteration).
+ *
+ * Examples (with a sink that always returns true):
  *   PathRoot="/",     Mount="/Root/Sub" → emits "/Root", "/Root/Sub"
  *   PathRoot="/Root", Mount="/Root/Sub" → emits "/Root/Sub"
  *   PathRoot="/Root", Mount="/Root/Sub/Inner" → emits "/Root/Sub", "/Root/Sub/Inner"
@@ -204,7 +216,10 @@ void UContentBrowserExtensionDataSource::BuildRootPathVirtualTree()
 	}
 	else
 	{
-		UE_LOG(LogContentBrowserExtensions, Warning, TEXT(" BuildRootPathVirtualTree: MountRoot is empty!"));
+		// Verbose (not Warning): empty MountRoot is a benign state during test fixtures
+		// that build a DataSource without InitializeWithAssets. The data source simply
+		// renders nothing in that state — no user-visible failure mode warrants Warning.
+		UE_LOG(LogContentBrowserExtensions, Verbose, TEXT(" BuildRootPathVirtualTree: MountRoot is empty!"));
 	}
 }
 

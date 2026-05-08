@@ -227,9 +227,15 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 			});
 		}
 
-		// Seed the FName display table: constructing FName with the mixed-case string first
-		// sets the display-index to that casing. Later FName(lowercase) constructions find the
-		// existing comparison entry (case-insensitive) and leave the display string unchanged.
+		// Intentional FName-display-table priming: constructing FName from the
+		// mixed-case Pair.Value ensures the global FName display index records
+		// the best-cased form for downstream lookups. The (void)Seed cast marks
+		// the discard as deliberate (not a forgotten variable).
+		//
+		// FName display-index semantics: the FIRST FName constructed for a given
+		// case-insensitive comparison key sets the display string. Later
+		// FName(lowercase) constructions find the existing entry and leave the
+		// display string unchanged.
 		for (const auto& Pair : BestFullPath)
 		{
 			FName Seed(*Pair.Value);
