@@ -123,23 +123,34 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 			FPathViews::Append(FullPathBuilder, Entry.Path);
 			FString FullPath(FullPathBuilder);
 
-			// Start from the PARENT of FullPath, not FullPath itself.
-			// This excludes the leaf asset path from contaminating the folder FName table.
-			// FPathViews::GetPath returns "" when no slash is present, matching the
-			// short-circuit semantics of the original FindLastChar/Left pair (which used
-			// `LastSlash == 0` to fall through to `continue`).
-			FString CurrentPath(FPathViews::GetPath(FullPath));
-			if (CurrentPath.IsEmpty())
+			// Walk every strict ancestor of FullPath up to (but not into) MountRoot,
+			// recording the best-cased form for each ancestor path.
+			//
+			// CRITICAL INVARIANT — skip the first emission (the leaf path itself):
+			// IterateAncestors yields the input path as its first call, then each parent
+			// leaf-to-root. We MUST skip the leaf because a leaf asset and a same-named
+			// folder can coexist at the same case-insensitive path key (e.g. leaf
+			// "Art_Exterior" alongside folder "art_exterior" containing children); seeding
+			// the FName table with the leaf's casing would contaminate the folder display
+			// (and vice-versa) via the shared case-insensitive FName table. Only paths that
+			// appear as INTERMEDIATE ancestors of some asset path contribute casing.
+			//
+			// Mount-root boundary: stop when an ancestor reaches/falls below MountRoot.Len().
+			// (Matches the original `if (CurrentPath.Len() <= MountRoot.Len()) break;`.)
+			bool bSkippedLeaf = false;
+			FPathViews::IterateAncestors(FullPath, [&](FStringView Ancestor) -> bool
 			{
-				continue;
-			}
-			if (CurrentPath.Len() <= MountRoot.Len())
-			{
-				continue;
-			}
+				if (!bSkippedLeaf)
+				{
+					bSkippedLeaf = true;
+					return true; // skip the leaf itself
+				}
+				if (Ancestor.Len() <= MountRoot.Len())
+				{
+					return false; // stop at the mount-root boundary
+				}
 
-			while (!CurrentPath.IsEmpty())
-			{
+				FString CurrentPath(Ancestor);
 				FString Lower = CurrentPath.ToLower();
 				if (FString* Existing = BestFullPath.Find(Lower))
 				{
@@ -147,25 +158,15 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 					const bool bNewHasUpper      = !CurrentPath.Equals(CurrentPath.ToLower());
 					if (bExistingAllLower && bNewHasUpper)
 					{
-						*Existing = CurrentPath;
+						*Existing = MoveTemp(CurrentPath);
 					}
 				}
 				else
 				{
-					BestFullPath.Add(Lower, CurrentPath);
+					BestFullPath.Add(Lower, MoveTemp(CurrentPath));
 				}
-
-				// FPathViews::GetPath returns "" when no slash is present, AND also when the
-				// only slash is the leading one (e.g. "/foo" → ""). This matches the original
-				// `FindLastChar(...) || LastSlash == 0 → break` semantics.
-				FString ParentOfCurrent(FPathViews::GetPath(CurrentPath));
-				if (ParentOfCurrent.IsEmpty())
-				{
-					break;
-				}
-				CurrentPath = MoveTemp(ParentOfCurrent);
-				if (CurrentPath.Len() <= MountRoot.Len()) { break; }
-			}
+				return true;
+			});
 		}
 
 		// Seed the FName display table: constructing FName with the mixed-case string first
@@ -201,28 +202,35 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 		// Add the leaf item (last entry wins for duplicates)
 		LeafItems.Add(LeafName, Entry);
 
-		// Walk up the ancestor chain, adding folder entries and tracking best casing.
-		// We start from the PARENT of FullPath — deliberately skipping the leaf's own
-		// path segment. This prevents a leaf asset's casing (e.g. "Art_Exterior") from
-		// contaminating the display name of a same-named folder at the same case-insensitive
-		// path (e.g. "art_exterior" folder containing children).
-		// Only paths where a segment appears as an INTERMEDIATE ancestor contribute casing.
-		FString CurrentPath = FullPath;
-		FString ParentPath;
-
-		// First iteration: establish parent/child relationship for the leaf, but do NOT
-		// add the leaf's own segment to BestSegmentName.
+		// Walk up the ancestor chain via FPathViews::IterateAncestors (leaf-to-root),
+		// adding folder entries and tracking best casing. The visitor receives each ancestor
+		// in turn and forms edges (Child, Parent) using a one-step lag: `PrevAncestor` holds
+		// the previous emission (the child of the current emission).
+		//
+		// CRITICAL INVARIANT — exclude the leaf's own path from BestSegmentName:
+		// A leaf asset's casing (e.g. "Art_Exterior") must not contaminate the display name
+		// of a same-named folder at the same case-insensitive path (e.g. "art_exterior"
+		// folder containing children). Only paths that appear as an INTERMEDIATE ancestor
+		// of some asset contribute casing. We achieve this by skipping BestSegmentName
+		// updates for the (FullPath, FullPath.Parent) edge — i.e. the first edge formed by
+		// the IterateAncestors walk. ChildrenMap and FolderPaths additions still happen for
+		// that edge (they don't go through the case-folding FName display table).
+		FString PrevAncestor = FullPath;
+		bool bFirst = true; // true on the very first emission (the leaf path itself)
+		bool bStop  = false;
+		FPathViews::IterateAncestors(FullPath, [&](FStringView Ancestor) -> bool
 		{
-			// FPathViews::GetPath returns "" when no slash is present — matches the
-			// original FindLastChar early-exit path.
-			ParentPath = FString(FPathViews::GetPath(CurrentPath));
-			if (ParentPath.IsEmpty())
+			if (bFirst)
 			{
-				continue;
+				// First emission is FullPath itself — no edge yet, just seed PrevAncestor.
+				bFirst = false;
+				return true;
 			}
 
+			// Form edge: PrevAncestor is the child, Ancestor is the parent.
+			FString ParentPath(Ancestor);
 			FName ParentName(*ParentPath);
-			FName ChildName(*CurrentPath);
+			FName ChildName(*PrevAncestor);
 
 			TArray<FName>& Children = ChildrenMap.FindOrAdd(ParentName);
 			Children.AddUnique(ChildName);
@@ -232,48 +240,16 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 				FolderPaths.Add(ParentName);
 			}
 
-			// Do NOT track BestSegmentName for the leaf's own path — see comment above.
-
-			if (ParentPath == MountRoot)
+			// Track BestSegmentName for the CHILD (PrevAncestor) — but only when it is not
+			// the leaf path itself. The leaf-edge has PrevAncestor == FullPath.
+			if (PrevAncestor != FullPath)
 			{
-				continue;
-			}
-
-			CurrentPath = ParentPath;
-		}
-
-		// Subsequent iterations: walk ancestor folders, tracking best casing for each.
-		while (true)
-		{
-			// FPathViews::GetPath returns "" when no slash is present — matches the original
-			// FindLastChar early-break path.
-			ParentPath = FString(FPathViews::GetPath(CurrentPath));
-			if (ParentPath.IsEmpty())
-			{
-				break;
-			}
-
-			FName ParentName(*ParentPath);
-			FName ChildName(*CurrentPath);
-
-			TArray<FName>& Children = ChildrenMap.FindOrAdd(ParentName);
-			Children.AddUnique(ChildName);
-
-			if (ParentPath != MountRoot)
-			{
-				FolderPaths.Add(ParentName);
-			}
-
-			// Track the best-cased segment name for this path level.
-			// A segment is "better" if it contains uppercase characters while the
-			// currently stored best is all-lowercase.
-			{
-				FString CurrentSegment(FPathViews::GetPathLeaf(CurrentPath));
-				FString CurrentPathLower = CurrentPath.ToLower();
+				FString CurrentSegment(FPathViews::GetPathLeaf(PrevAncestor));
+				FString CurrentPathLower = PrevAncestor.ToLower();
 				FString* ExistingBest = BestSegmentName.Find(CurrentPathLower);
 				if (!ExistingBest)
 				{
-					BestSegmentName.Add(CurrentPathLower, CurrentSegment);
+					BestSegmentName.Add(CurrentPathLower, MoveTemp(CurrentSegment));
 				}
 				else
 				{
@@ -281,18 +257,22 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 					const bool bNewHasUpper     = !CurrentSegment.Equals(CurrentSegment.ToLower());
 					if (bExistingIsLower && bNewHasUpper)
 					{
-						*ExistingBest = CurrentSegment;
+						*ExistingBest = MoveTemp(CurrentSegment);
 					}
 				}
 			}
 
+			// Stop after processing the edge whose parent is MountRoot.
 			if (ParentPath == MountRoot)
 			{
-				break;
+				bStop = true;
+				return false;
 			}
 
-			CurrentPath = ParentPath;
-		}
+			PrevAncestor = MoveTemp(ParentPath);
+			return true;
+		});
+		(void)bStop;
 	}
 
 	// Populate DisplayNameMap for any asset-path segment where the best-cased name

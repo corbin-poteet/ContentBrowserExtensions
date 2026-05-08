@@ -39,6 +39,51 @@ static FName StripAllPrefix(const FName InPath)
 	return InPath;
 }
 
+/**
+ * Walks the path components of `Mount` strictly under `PathRoot`, emitting each
+ * accumulated ancestor path (root-to-leaf) including `Mount` itself. Sink returns
+ * false to stop early (e.g. to emit only the first segment, or to stop before Mount).
+ *
+ * Built on `FPathViews::TryMakeChildPathRelativeTo` (boundary-aware parent check)
+ * + `FPathViews::SplitFirstComponent` (per-segment iteration). Replaces three
+ * hand-rolled `Mount.Find("/", FromStart, SearchFrom)` walks (T5).
+ *
+ * Examples:
+ *   PathRoot="/",     Mount="/Root/Sub" → emits "/Root", "/Root/Sub"
+ *   PathRoot="/Root", Mount="/Root/Sub" → emits "/Root/Sub"
+ *   PathRoot="/Root", Mount="/Root/Sub/Inner" → emits "/Root/Sub", "/Root/Sub/Inner"
+ *
+ * No emission is made if `PathRoot` is not a parent of (or equal to) `Mount`.
+ */
+static void EmitMountAncestorsBetween(FStringView PathRoot, FStringView Mount,
+	TFunctionRef<bool(FStringView Accumulated)> Sink)
+{
+	FStringView Rel;
+	if (!FPathViews::TryMakeChildPathRelativeTo(Mount, PathRoot, Rel))
+	{
+		return;
+	}
+
+	TStringBuilder<256> Acc;
+	Acc << PathRoot;
+	FStringView Cursor = Rel;
+	while (!Cursor.IsEmpty())
+	{
+		FStringView FirstSeg, Remainder;
+		FPathViews::SplitFirstComponent(Cursor, FirstSeg, Remainder);
+		if (FirstSeg.IsEmpty())
+		{
+			break;
+		}
+		FPathViews::Append(Acc, FirstSeg);
+		if (!Sink(Acc.ToView()))
+		{
+			return;
+		}
+		Cursor = Remainder;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Initialization / Shutdown
 // ---------------------------------------------------------------------------
@@ -131,19 +176,23 @@ void UContentBrowserExtensionDataSource::BuildRootPathVirtualTree()
 		// subsystem routes GetItemAtPath through our EnumerateItemsAtPath (which
 		// provides display names from DisplayNameMap) instead of creating generic
 		// virtual folder items with sanitized path segments as labels.
+		//
+		// Order: emit ancestors root-to-leaf (e.g. "/Root" before "/Root/Sub"),
+		// then emit Mount itself as the final RootPathAdded call. The
+		// EmitMountAncestorsBetween helper yields up-to-and-including Mount; we stop
+		// just before Mount to keep the explicit RootPathAdded(Mount) call site
+		// (preserves blame readability + matches the original two-step pattern).
 		const FString& Mount = PathIndex.MountRoot;
-		int32 SearchFrom = 1; // skip leading slash
-		while (SearchFrom < Mount.Len())
-		{
-			int32 NextSlash = Mount.Find(TEXT("/"), ESearchCase::IgnoreCase, ESearchDir::FromStart, SearchFrom);
-			if (NextSlash == INDEX_NONE)
+		EmitMountAncestorsBetween(FStringView(TEXT("/")), Mount,
+			[this, &Mount](FStringView Accumulated) -> bool
 			{
-				break;
-			}
-			FString AncestorPath = Mount.Left(NextSlash);
-			RootPathAdded(AncestorPath);
-			SearchFrom = NextSlash + 1;
-		}
+				if (Accumulated.Equals(Mount, ESearchCase::IgnoreCase))
+				{
+					return false; // stop before emitting Mount itself
+				}
+				RootPathAdded(FString(Accumulated));
+				return true;
+			});
 
 		RootPathAdded(PathIndex.MountRoot);
 	}
@@ -253,18 +302,16 @@ void UContentBrowserExtensionDataSource::EnumerateItemsMatchingFilter(
 			//      PathRoot="/Root" → return "/Root/Sub"
 			if (Filter->bIncludeFolders)
 			{
-				// Find the next segment of MountRoot after PathRoot
-				const FString& Mount = PathIndex.MountRoot;
-				int32 SearchFrom = PathRootStr.Len();
-				// Skip the separator between PathRoot and the next segment
-				if (SearchFrom < Mount.Len() && Mount[SearchFrom] == TEXT('/'))
-				{
-					SearchFrom++;
-				}
-				int32 NextSlash = Mount.Find(TEXT("/"), ESearchCase::IgnoreCase, ESearchDir::FromStart, SearchFrom);
-				FString ChildPath = (NextSlash != INDEX_NONE) ? Mount.Left(NextSlash) : Mount;
-				FContentBrowserItemData Item = MakeFolderItem(FName(*ChildPath));
-				(void)InCallback(MoveTemp(Item)); // single emission — callback's stop signal has no follow-up to skip
+				// Emit only the FIRST ancestor segment after PathRoot (which may be Mount
+				// itself if PathRoot is the immediate parent of Mount). Stop the helper
+				// after one emission by returning false from the sink.
+				EmitMountAncestorsBetween(PathRootStr, PathIndex.MountRoot,
+					[this, &InCallback](FStringView ChildPath) -> bool
+					{
+						FContentBrowserItemData Item = MakeFolderItem(FName(ChildPath));
+						(void)InCallback(MoveTemp(Item)); // single emission — callback's stop signal has no follow-up to skip
+						return false; // stop after the first ancestor
+					});
 			}
 			return;
 		}
@@ -303,40 +350,31 @@ void UContentBrowserExtensionDataSource::EnumerateItemsMatchingFilter(
 	// Recursive: return all items under PathRoot.
 	if (Filter->bIncludeFolders)
 	{
-		// Emit ancestor folders between PathRoot and MountRoot so the folder tree
+		// Emit ancestor folders strictly between PathRoot and MountRoot so the folder tree
 		// gets items with proper display names (instead of creating placeholder parents
 		// that fall back to the sanitized path segment).
 		//
-		// Loop invariant: SearchFrom points at the start of the next un-processed segment
-		// in Mount (i.e. the character right after the previous slash). Each iteration finds
-		// the next slash, emits the ancestor up to that slash, and advances SearchFrom past
-		// it. The mount-root itself is handled by the FolderPaths loop below — we stop when
-		// we run out of slashes.
+		// The mount-root itself is in FolderPaths and emitted by the main loop below — we
+		// stop just before reaching it. EmitMountAncestorsBetween yields up-to-and-including
+		// Mount root-to-leaf; the sink filters out the Mount emission.
 		const FString& Mount = PathIndex.MountRoot;
-		// IsParentPathOf is boundary-aware (rejects "/Foo" against "/FooBar/...").
-		// Combined with !Equals, this preserves the original "PathRoot is a strict
-		// ancestor of Mount" semantics.
-		if (FPathViews::IsParentPathOf(PathRootStr, Mount)
-			&& !PathRootStr.Equals(Mount, ESearchCase::IgnoreCase))
-		{
-			int32 SearchFrom = PathRootStr.Len();
-			if (SearchFrom < Mount.Len() && Mount[SearchFrom] == TEXT('/'))
+		bool bEarlyReturn = false;
+		EmitMountAncestorsBetween(PathRootStr, Mount,
+			[this, &Mount, &InCallback, &bEarlyReturn](FStringView Accumulated) -> bool
 			{
-				SearchFrom++;
-			}
-			while (SearchFrom < Mount.Len())
-			{
-				int32 NextSlash = Mount.Find(TEXT("/"), ESearchCase::IgnoreCase, ESearchDir::FromStart, SearchFrom);
-				if (NextSlash == INDEX_NONE)
+				if (Accumulated.Equals(Mount, ESearchCase::IgnoreCase))
 				{
-					break; // mount root itself is in FolderPaths and emitted by the main loop
+					return false; // mount-root handled by FolderPaths loop below
 				}
-				FString AncestorPath = Mount.Left(NextSlash);
-				FContentBrowserItemData Item = MakeFolderItem(FName(*AncestorPath));
-				if (!InCallback(MoveTemp(Item))) { return; }
-				SearchFrom = NextSlash + 1;
-			}
-		}
+				FContentBrowserItemData Item = MakeFolderItem(FName(Accumulated));
+				if (!InCallback(MoveTemp(Item)))
+				{
+					bEarlyReturn = true;
+					return false; // CB requested stop
+				}
+				return true;
+			});
+		if (bEarlyReturn) { return; }
 
 		for (const FName& FolderPath : PathIndex.FolderPaths)
 		{
