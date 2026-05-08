@@ -4,6 +4,7 @@
 
 #include "ContentBrowserDataSource.h"
 #include "ContentBrowserExtensionAssetEntry.h"
+#include "ContentBrowserExtensionFolderSegment.h"
 #include "ContentBrowserExtensionPathIndex.h"
 #include "ContentBrowserExtensionItemPayload.h"
 
@@ -78,6 +79,27 @@ public:
 	 * @param InAssets         Flat list of {Path, Type} entries.
 	 */
 	CONTENTBROWSEREXTENSIONS_API void InitializeWithAssets(const FString& InMountRootPath, TArray<FContentBrowserExtensionAssetEntry>&& InAssets);
+
+	/**
+	 * Populate the path index from a structured array of mount-root segments — preferred form.
+	 *
+	 * Each segment carries an explicit (PathName, DisplayName) pair so consumers can
+	 * decouple the on-disk path identifier from the human-readable label. This avoids
+	 * the sanitizer-roundtrip ambiguity of the string overload (e.g. "ThirdParty"
+	 * passed as a single string sanitizes to "Thirdparty" because it lacks a word
+	 * boundary; with this overload you supply both forms unambiguously).
+	 *
+	 * Example:
+	 *   TArray<FContentBrowserExtensionFolderSegment> RootSegments = {
+	 *       { TEXT("ThirdParty"),          TEXT("Third Party") },
+	 *       FContentBrowserExtensionFolderSegment::FromDisplayName(TEXT("STAR WARS™ Battlefront™ II")),
+	 *   };
+	 *   DataSource->InitializeWithAssets(RootSegments, MoveTemp(Entries));
+	 *
+	 * @param InMountRootSegments  Ordered list of segments forming the mount-root hierarchy.
+	 * @param InAssets             Flat list of {Path, Type} entries under the mount root.
+	 */
+	CONTENTBROWSEREXTENSIONS_API void InitializeWithAssets(const TArray<FContentBrowserExtensionFolderSegment>& InMountRootSegments, TArray<FContentBrowserExtensionAssetEntry>&& InAssets);
 
 	/**
 	 * Collect all leaf asset entries under a folder path, optionally filtered by type.

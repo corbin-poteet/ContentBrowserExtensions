@@ -9,64 +9,75 @@
 
 void FContentBrowserExtensionPathIndex::BuildFromFlatList(const FString& InMountRoot, const TArray<FContentBrowserExtensionAssetEntry>& FlatList)
 {
-	Reset();
+	// Derive (PathName, DisplayName) segments by sanitizing the input and pairing each
+	// sanitized segment with its original form, then delegate to the structured overload.
+	const FString Sanitized = UE::ContentBrowserExtensions::SanitizeForPackagePath(InMountRoot);
 
-	// Sanitize the mount root and build the display name map for changed segments.
-	MountRoot = UE::ContentBrowserExtensions::SanitizeForPackagePath(InMountRoot);
-
-	// Compare original vs sanitized segments to build DisplayNameMap.
-	// Split both by '/' keeping empty entries (bCullEmpty=false) so segment indices align —
-	// this guarantees the two arrays have the same count, since:
-	//   - Splits by the same delimiter ('/').
-	//   - Both keep empty entries (a leading slash → empty first segment in both arrays).
-	//   - Sanitization preserves the segment count (WR-01 added a post-pass to drop fully-
-	//     stripped empty segments, but that runs AFTER the per-segment sanitize loop and
-	//     does NOT affect the outputs of ParseIntoArray here, which operate on InMountRoot
-	//     and MountRoot — the sanitized full string. After WR-01 the count may differ in
-	//     pathological cases where a segment sanitized to empty was dropped, hence we still
-	//     guard with FMath::Min below to be safe rather than asserting equality.)
-	// If both ParseIntoArray calls ever change to bCullEmpty=true on only one side, the
-	// per-index pairing here would silently desync the DisplayNameMap.
 	TArray<FString> OrigSegments;
 	TArray<FString> SanitizedSegments;
 	InMountRoot.ParseIntoArray(OrigSegments, TEXT("/"), /*bCullEmpty=*/false);
-	MountRoot.ParseIntoArray(SanitizedSegments, TEXT("/"), /*bCullEmpty=*/false);
+	Sanitized.ParseIntoArray(SanitizedSegments, TEXT("/"), /*bCullEmpty=*/false);
 
-	// Reconstruct the running sanitized path prefix as we walk segments.
-	FString RunningPath;
+	TArray<FContentBrowserExtensionFolderSegment> Segments;
+	Segments.Reserve(FMath::Min(OrigSegments.Num(), SanitizedSegments.Num()));
+
 	const int32 SegCount = FMath::Min(OrigSegments.Num(), SanitizedSegments.Num());
 	for (int32 i = 0; i < SegCount; ++i)
 	{
-		const FString& OrigSeg = OrigSegments[i];
-		const FString& SanSeg  = SanitizedSegments[i];
-
-		if (i == 0 && OrigSeg.IsEmpty())
+		// Skip the empty leading-slash segment and any segment that the sanitizer dropped
+		// (e.g. an entire segment composed of stripped characters).
+		if (OrigSegments[i].IsEmpty() || SanitizedSegments[i].IsEmpty())
 		{
-			// Leading slash produced an empty first segment — just add the slash to path.
-			RunningPath += TEXT("/");
+			continue;
+		}
+		Segments.Emplace(SanitizedSegments[i], OrigSegments[i]);
+	}
+
+	BuildFromFolderSegments(Segments, FlatList);
+}
+
+void FContentBrowserExtensionPathIndex::BuildFromFolderSegments(
+	const TArray<FContentBrowserExtensionFolderSegment>& InMountRootSegments,
+	const TArray<FContentBrowserExtensionAssetEntry>& FlatList)
+{
+	Reset();
+
+	// Build the mount root by joining the path-form (.PathName) of each segment with '/'
+	// and seed DisplayNameMap from any segment whose .DisplayName differs from .PathName.
+	// Trust the consumer's PathName values verbatim — no sanitizer applied here. (Use
+	// FContentBrowserExtensionFolderSegment::FromDisplayName at the consumer call site if
+	// you want the plugin's default sanitizer to derive PathName from DisplayName.)
+	FString RunningPath;
+	for (const FContentBrowserExtensionFolderSegment& Seg : InMountRootSegments)
+	{
+		if (Seg.PathName.IsEmpty())
+		{
 			continue;
 		}
 
-		if (!OrigSeg.IsEmpty())
-		{
-			if (!RunningPath.IsEmpty() && !RunningPath.EndsWith(TEXT("/")))
-			{
-				RunningPath += TEXT("/");
-			}
-			RunningPath += SanSeg;
+		RunningPath += TEXT("/");
+		RunningPath += Seg.PathName;
 
-			// Only add to DisplayNameMap when the segment changed
-			if (OrigSeg != SanSeg)
-			{
-				DisplayNameMap.Add(FName(*RunningPath), OrigSeg);
-			}
+		if (!Seg.DisplayName.IsEmpty() && !Seg.DisplayName.Equals(Seg.PathName, ESearchCase::CaseSensitive))
+		{
+			DisplayNameMap.Add(FName(*RunningPath), Seg.DisplayName);
 		}
 	}
+
+	MountRoot = MoveTemp(RunningPath);
 
 	FName MountRootName(*MountRoot);
 
 	// Always add the mount root as a folder path
 	FolderPaths.Add(MountRootName);
+
+	IndexAssetEntries(FlatList);
+}
+
+void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentBrowserExtensionAssetEntry>& FlatList)
+{
+	// (Implementation below is the original asset-walking pass; mount-root setup now
+	//  lives in BuildFromFolderSegments above and is shared by both public entry points.)
 
 	// Pre-pass: collect the best-cased full path for every ANCESTOR (intermediate folder)
 	// and seed the FName display table before the main loop.

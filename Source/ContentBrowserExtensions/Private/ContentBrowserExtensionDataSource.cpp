@@ -55,6 +55,21 @@ void UContentBrowserExtensionDataSource::InitializeWithAssets(
 		*PathIndex.MountRoot, PathIndex.FolderPaths.Num(), PathIndex.LeafItems.Num());
 }
 
+void UContentBrowserExtensionDataSource::InitializeWithAssets(
+	const TArray<FContentBrowserExtensionFolderSegment>& InMountRootSegments,
+	TArray<FContentBrowserExtensionAssetEntry>&& InAssets)
+{
+	// Data-population only. Same lifecycle contract as the string overload — subsystem
+	// owns Initialize/ActivateDataSource per D-02. This overload trusts consumer-supplied
+	// PathName/DisplayName values and skips the sanitizer roundtrip.
+	PathIndex.BuildFromFolderSegments(InMountRootSegments, InAssets);
+	bDiscoveryComplete = true;
+
+	UE_LOG(LogContentBrowserExtensions, Verbose,
+		TEXT("InitializeWithAssets(segments): mount='%s' folders=%d leaves=%d segs=%d"),
+		*PathIndex.MountRoot, PathIndex.FolderPaths.Num(), PathIndex.LeafItems.Num(), InMountRootSegments.Num());
+}
+
 void UContentBrowserExtensionDataSource::Shutdown()
 {
 	if (!IsInitialized())

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "ContentBrowserExtensionAssetEntry.h"
+#include "ContentBrowserExtensionFolderSegment.h"
 
 /**
  * Sanitize a string (or full virtual path) so it only contains characters valid in a UE
@@ -70,13 +71,51 @@ struct CONTENTBROWSEREXTENSIONS_API FContentBrowserExtensionPathIndex
 	FString MountRoot;
 
 	/**
-	 * Build the index from a flat list of FContentBrowserExtensionAssetEntry objects.
+	 * Build the index from a flat list of FContentBrowserExtensionAssetEntry objects,
+	 * using a string mount root that is sanitized internally.
 	 *
-	 * @param InMountRoot  The virtual mount root (e.g. "/MyTool/MyData"). Consumer-supplied; plugin hardcodes nothing.
+	 * Convenience overload — derives mount-root segments by sanitizing InMountRoot and
+	 * recovering each segment's display form from the original input. Equivalent to:
+	 *   BuildFromFolderSegments( {SegmentsFromString(InMountRoot)}, FlatList )
+	 *
+	 * Prefer the BuildFromFolderSegments overload when you want explicit control over
+	 * the (PathName, DisplayName) pair for each mount-root segment — particularly when
+	 * the path-form is not the sanitized round-trip of the display-form (e.g. PathName
+	 * "ThirdParty" + DisplayName "Third Party": the sanitizer would collapse "ThirdParty"
+	 * to "Thirdparty" because it lacks a word boundary).
+	 *
+	 * @param InMountRoot  The virtual mount root (e.g. "/My Folder/My Game" or "/MyTool/MyData").
+	 *                     Consumer-supplied; plugin hardcodes nothing.
 	 * @param FlatList     Flat array of {Path, Type} entries.
 	 */
 	void BuildFromFlatList(const FString& InMountRoot, const TArray<FContentBrowserExtensionAssetEntry>& FlatList);
 
+	/**
+	 * Build the index from a structured array of mount-root segments — preferred form.
+	 *
+	 * Each segment carries an explicit (PathName, DisplayName) pair. The mount root is
+	 * constructed by joining the PathName values with '/'; DisplayNameMap is seeded
+	 * directly from any segment whose DisplayName differs from its PathName. No sanitizer
+	 * is applied to the segments — consumers are trusted to supply path-valid PathNames.
+	 *
+	 * @param InMountRootSegments  Ordered list of (PathName, DisplayName) segments forming
+	 *                             the mount-root hierarchy. The full mount root is
+	 *                             "/" + Join(.PathName, "/").
+	 * @param FlatList             Flat array of {Path, Type} entries under the mount root.
+	 */
+	void BuildFromFolderSegments(const TArray<FContentBrowserExtensionFolderSegment>& InMountRootSegments,
+	                             const TArray<FContentBrowserExtensionAssetEntry>& FlatList);
+
 	/** Clear all state. Call when the consumer's data set changes or the panel is reset. */
 	void Reset();
+
+private:
+	/**
+	 * Walk the asset entries to populate ChildrenMap / LeafItems / FolderPaths and the
+	 * best-cased DisplayNameMap entries for ancestor segments.
+	 *
+	 * Caller must have set MountRoot and seeded any mount-root DisplayNameMap entries
+	 * before invoking this.
+	 */
+	void IndexAssetEntries(const TArray<FContentBrowserExtensionAssetEntry>& FlatList);
 };
