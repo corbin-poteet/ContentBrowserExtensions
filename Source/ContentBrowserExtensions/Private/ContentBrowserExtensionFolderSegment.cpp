@@ -30,8 +30,10 @@ FContentBrowserExtensionFolderSegment::FContentBrowserExtensionFolderSegment(con
 	DisplayName = PathName;
 }
 
-FContentBrowserExtensionFolderSegment::FContentBrowserExtensionFolderSegment(const FString& InPathName, const FString& InDisplayName)
+FContentBrowserExtensionFolderSegment::FContentBrowserExtensionFolderSegment(const FString& InPathName, const FString& InDisplayName, bool bSanitizePathName)
 {
-	PathName = UE::ContentBrowserExtensions::Private::SanitizeSegment(InPathName);
+	PathName = bSanitizePathName
+		? UE::ContentBrowserExtensions::Private::SanitizeSegment(InPathName)
+		: InPathName;
 	DisplayName = InDisplayName;
 }
