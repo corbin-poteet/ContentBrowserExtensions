@@ -3,8 +3,58 @@
 #include "ContentBrowserExtensionPathIndex.h"
 #include "ContentBrowserExtensionsStatics.h"
 
+#include "Misc/Char.h"
 #include "Misc/PathViews.h"
 #include "Misc/StringBuilder.h"
+
+// ---------------------------------------------------------------------------
+// File-local helpers (TA2 / 260508-ih3)
+// ---------------------------------------------------------------------------
+//
+// Replace the four `*.ToLower().Equals(...)` casing predicates that the prior
+// shipped state used inside the IndexAssetEntries best-casing-wins logic with
+// 1-pass FStringView scans. Same truth table for any string with at least one
+// alpha char; for all-digit / all-symbol strings both predicates return
+// (true, false) which preserves the no-upgrade behavior of the original
+// (`ToLower().Equals(s)` returns true for non-alpha-only strings — so the
+// original `bExistingAllLower && bNewHasUpper` becomes (true && false) = false,
+// matching `IsAllLowerAlpha(true) && HasUpperAlpha(false)`).
+//
+// Behavior preserved exactly because:
+//   - FString::ToLower only changes alpha characters; non-alpha (digits,
+//     slashes, underscore, hyphen, dot) compare equal in both versions.
+//   - The shape of the casing-predicate ("existing has no uppercase alpha AND
+//     incoming has at least one uppercase alpha") is what these helpers
+//     encode — and that's the only real-world casing-upgrade trigger.
+//
+// See 260508-ih3-RESEARCH.md § "Pitfalls → Verifying IsAllLowerAlpha
+// correctness" for the full derivation.
+namespace
+{
+	bool IsAllLowerAlpha(FStringView S)
+	{
+		for (TCHAR C : S)
+		{
+			if (FChar::IsAlpha(C) && FChar::IsUpper(C))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool HasUpperAlpha(FStringView S)
+	{
+		for (TCHAR C : S)
+		{
+			if (FChar::IsAlpha(C) && FChar::IsUpper(C))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
 
 // ---------------------------------------------------------------------------
 // FContentBrowserExtensionPathIndex
@@ -114,7 +164,13 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 	// By seeding ONLY ancestor paths, each folder gets the best casing seen across paths that
 	// pass through it as an intermediate segment.
 	{
-		TMap<FString, FString> BestFullPath; // lowercase ancestor-path → best-cased ancestor path
+		// FName is case-insensitive natively — same dedup grouping as a lowercased-FString
+		// key, but without the per-iteration `ToLower()` allocation. Iteration order over
+		// this map is FName-hash-bucket (not deterministic-lowercase-FString) but that
+		// doesn't affect the final FName-display-table priming because each Pair.Value
+		// is independently constructed as an FName below; order is irrelevant for the
+		// "best casing wins" semantic. (260508-ih3 / TA2: lifts Don't-touch #7.)
+		TMap<FName, FString> BestFullPath; // case-insensitive ancestor-path → best-cased ancestor path
 
 		for (const FContentBrowserExtensionAssetEntry& Entry : FlatList)
 		{
@@ -150,20 +206,22 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 					return false; // stop at the mount-root boundary
 				}
 
+				// TA2 / 260508-ih3 (F5+F14): replace lowercase-key + ToLower-equality
+				// predicates with case-insensitive FName key + IsAllLowerAlpha /
+				// HasUpperAlpha 1-pass scans. Same behavior, ~3 fewer heap allocations
+				// per ancestor visit on the hot loop.
 				FString CurrentPath(Ancestor);
-				FString Lower = CurrentPath.ToLower();
-				if (FString* Existing = BestFullPath.Find(Lower))
+				const FName Key(*CurrentPath);
+				if (FString* Existing = BestFullPath.Find(Key))
 				{
-					const bool bExistingAllLower = Existing->Equals(Existing->ToLower());
-					const bool bNewHasUpper      = !CurrentPath.Equals(CurrentPath.ToLower());
-					if (bExistingAllLower && bNewHasUpper)
+					if (IsAllLowerAlpha(*Existing) && HasUpperAlpha(CurrentPath))
 					{
 						*Existing = MoveTemp(CurrentPath);
 					}
 				}
 				else
 				{
-					BestFullPath.Add(Lower, MoveTemp(CurrentPath));
+					BestFullPath.Add(Key, MoveTemp(CurrentPath));
 				}
 				return true;
 			});
@@ -179,16 +237,19 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 		}
 	}
 
-	// Track the best-known display name for each internal path segment, keyed by lowercase
-	// full path.  The consumer may emit some entries with lowercase names and others with
-	// mixed-case names, so the same logical folder may appear as both "levels/mp" and
-	// "Levels/MP".  FName merges them case-insensitively but stores the display string from
-	// the *first* insertion, which is typically lowercase.  We resolve this by tracking the
-	// best-cased segment name for every ancestor path and populating DisplayNameMap so
-	// MakeFolderItem can use it.
-	// Key   = full internal path lowercased (e.g. "/root/sub/levels/mp")
+	// Track the best-known display name for each internal path segment, keyed by FName
+	// (case-insensitive natively).  The consumer may emit some entries with lowercase
+	// names and others with mixed-case names, so the same logical folder may appear as
+	// both "levels/mp" and "Levels/MP".  FName merges them case-insensitively but stores
+	// the display string from the *first* insertion, which is typically lowercase.  We
+	// resolve this by tracking the best-cased segment name for every ancestor path and
+	// populating DisplayNameMap so MakeFolderItem can use it.
+	// Key   = full internal path (FName, case-insensitive — e.g. FName("/root/sub/levels/mp"))
 	// Value = best-cased leaf segment seen so far (e.g. "MP")
-	TMap<FString, FString> BestSegmentName; // lowercase full-path → best display segment
+	// (TA2 / 260508-ih3: lifts Don't-touch #7 — was TMap<FString,FString> with `ToLower()`
+	// keys and `*.ToLower().Equals(...)` casing predicates; now FName-keyed with
+	// IsAllLowerAlpha / HasUpperAlpha 1-pass scans.)
+	TMap<FName, FString> BestSegmentName; // case-insensitive full-path → best display segment
 
 	for (const FContentBrowserExtensionAssetEntry& Entry : FlatList)
 	{
@@ -249,18 +310,20 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 			// the leaf path itself. The leaf-edge has PrevAncestor == FullPath.
 			if (PrevAncestor != FullPath)
 			{
+				// TA2 / 260508-ih3 (F5+F14): FName-keyed lookup + IsAllLowerAlpha /
+				// HasUpperAlpha 1-pass scans replace the lowercased-FString key and
+				// `*.ToLower().Equals(...)` predicates. Same behavior; ~3 fewer
+				// allocations per ancestor visit on the hot loop.
 				FString CurrentSegment(FPathViews::GetPathLeaf(PrevAncestor));
-				FString CurrentPathLower = PrevAncestor.ToLower();
-				FString* ExistingBest = BestSegmentName.Find(CurrentPathLower);
+				const FName CurrentPathKey(*PrevAncestor);
+				FString* ExistingBest = BestSegmentName.Find(CurrentPathKey);
 				if (!ExistingBest)
 				{
-					BestSegmentName.Add(CurrentPathLower, MoveTemp(CurrentSegment));
+					BestSegmentName.Add(CurrentPathKey, MoveTemp(CurrentSegment));
 				}
 				else
 				{
-					const bool bExistingIsLower = ExistingBest->Equals(ExistingBest->ToLower());
-					const bool bNewHasUpper     = !CurrentSegment.Equals(CurrentSegment.ToLower());
-					if (bExistingIsLower && bNewHasUpper)
+					if (IsAllLowerAlpha(*ExistingBest) && HasUpperAlpha(CurrentSegment))
 					{
 						*ExistingBest = MoveTemp(CurrentSegment);
 					}
@@ -285,12 +348,14 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 	// lowercase string).  MakeFolderItem checks DisplayNameMap to get the display name.
 	for (const auto& Pair : BestSegmentName)
 	{
-		const FString& LowerPath     = Pair.Key;
-		const FString& BestSegment   = Pair.Value;
+		// Pair.Key is the FName used by FolderPaths / ChildrenMap (case-insensitive).
+		// .ToString() gives back the first-inserted casing — which may be lowercase if
+		// the consumer emitted lowercase entries first. (TA2 / 260508-ih3: this used to
+		// reconstruct `FName(*Pair.Key)` from a lowercased-FString key — now it's
+		// already FName, so the indirection is gone.)
+		const FName& InternalName = Pair.Key;
+		const FString& BestSegment = Pair.Value;
 
-		// FName constructed from the original (possibly lowercase) path — this is what
-		// FolderPaths / ChildrenMap store.  .ToString() gives back the first-inserted casing.
-		FName InternalName(*LowerPath); // FName lookup is case-insensitive; finds existing entry
 		FString StoredDisplay = InternalName.ToString();
 
 		// Extract the leaf segment of the stored display string for comparison.
