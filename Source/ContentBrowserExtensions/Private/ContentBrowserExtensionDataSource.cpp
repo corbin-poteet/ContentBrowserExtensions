@@ -167,14 +167,13 @@ void UContentBrowserExtensionDataSource::CompileFilter(
 
 	// Accept if the request path is an ancestor of our mount root OR under it.
 	// The CB passes "/" as the root path for all data sources during folder tree population.
-	// Path-boundary check: "StartsWith" alone would match "/Foo" as ancestor of "/FooBar",
-	// so we verify the match ends at a '/' boundary or exact match.
+	// FPathViews::IsParentPathOf is boundary-aware (case-insensitive, treats / and \ as
+	// equivalent, and ignores trailing separators) so it correctly rejects sibling-prefix
+	// collisions like "/Foo" vs "/FooBar". It also returns true when Parent == Child.
 	const FString& MountRoot = PathIndex.MountRoot;
 	const FString InternalStr = InternalPath.ToString();
-	const bool bIsUnderMount = InternalStr.StartsWith(MountRoot, ESearchCase::IgnoreCase)
-		&& (InternalStr.Len() == MountRoot.Len() || InternalStr[MountRoot.Len()] == TEXT('/'));
-	const bool bIsAncestorOfMount = MountRoot.StartsWith(InternalStr, ESearchCase::IgnoreCase)
-		&& (MountRoot.Len() == InternalStr.Len() || InternalStr.Equals(TEXT("/")) || MountRoot[InternalStr.Len()] == TEXT('/'));
+	const bool bIsUnderMount      = FPathViews::IsParentPathOf(MountRoot, InternalStr);
+	const bool bIsAncestorOfMount = FPathViews::IsParentPathOf(InternalStr, MountRoot);
 	if (!bIsUnderMount && !bIsAncestorOfMount)
 	{
 		return;
@@ -240,8 +239,10 @@ void UContentBrowserExtensionDataSource::EnumerateItemsMatchingFilter(
 	{
 		// Non-recursive: return only direct children of PathRoot (like EnumerateItemsAtPath).
 		// The PathRoot may be "/" (ancestor of mount) — in that case return our mount root folder.
+		// IsParentPathOf returns true when Parent==Child, so explicitly exclude that case to
+		// preserve the "ancestor only, not equal" semantics of the original boundary check.
 		const FName PathRootName = Filter->PathRoot;
-		const bool bIsAncestorOfMount = PathIndex.MountRoot.StartsWith(PathRootStr, ESearchCase::IgnoreCase)
+		const bool bIsAncestorOfMount = FPathViews::IsParentPathOf(PathRootStr, PathIndex.MountRoot)
 			&& !PathRootStr.Equals(PathIndex.MountRoot, ESearchCase::IgnoreCase);
 
 		if (bIsAncestorOfMount)
@@ -312,7 +313,10 @@ void UContentBrowserExtensionDataSource::EnumerateItemsMatchingFilter(
 		// it. The mount-root itself is handled by the FolderPaths loop below — we stop when
 		// we run out of slashes.
 		const FString& Mount = PathIndex.MountRoot;
-		if (Mount.StartsWith(PathRootStr, ESearchCase::IgnoreCase)
+		// IsParentPathOf is boundary-aware (rejects "/Foo" against "/FooBar/...").
+		// Combined with !Equals, this preserves the original "PathRoot is a strict
+		// ancestor of Mount" semantics.
+		if (FPathViews::IsParentPathOf(PathRootStr, Mount)
 			&& !PathRootStr.Equals(Mount, ESearchCase::IgnoreCase))
 		{
 			int32 SearchFrom = PathRootStr.Len();
@@ -336,8 +340,11 @@ void UContentBrowserExtensionDataSource::EnumerateItemsMatchingFilter(
 
 		for (const FName& FolderPath : PathIndex.FolderPaths)
 		{
+			// T4 boundary-bug fix: previous code used raw `StartsWith(PathRootStr)` which
+			// matched sibling-prefix folders (e.g. "/X/FooBar/..." against PathRoot="/X/Foo").
+			// FPathViews::IsParentPathOf is boundary-aware and rejects sibling prefixes.
 			const FString FolderStr = FolderPath.ToString();
-			if (!FolderStr.StartsWith(PathRootStr, ESearchCase::IgnoreCase))
+			if (!FPathViews::IsParentPathOf(PathRootStr, FolderStr))
 			{
 				continue;
 			}
@@ -350,8 +357,9 @@ void UContentBrowserExtensionDataSource::EnumerateItemsMatchingFilter(
 	{
 		for (const auto& [LeafPath, Entry] : PathIndex.LeafItems)
 		{
+			// T4 boundary-bug fix (mirror of the folder loop above).
 			const FString LeafStr = LeafPath.ToString();
-			if (!LeafStr.StartsWith(PathRootStr, ESearchCase::IgnoreCase))
+			if (!FPathViews::IsParentPathOf(PathRootStr, LeafStr))
 			{
 				continue;
 			}
@@ -370,16 +378,19 @@ void UContentBrowserExtensionDataSource::EnumerateItemsAtPath(
 	const FName InternalPath = StripAllPrefix(InPath);
 
 	// Guard: only serve items for paths under or ancestral to our mount root.
+	// FPathViews::IsParentPathOf is boundary-aware (matches the original raw StartsWith
+	// + boundary-character checks but rejects sibling-prefix collisions like "/Foo" vs
+	// "/FooBar"). It returns true when Parent == Child, so it covers the prior
+	// `StartsWith || Equals` pair in a single call.
 	const FString InternalStr = InternalPath.ToString();
 	const FString& MountRoot = PathIndex.MountRoot;
 	if (MountRoot.IsEmpty())
 	{
 		return;
 	}
-	const bool bIsUnderOrAtMount = InternalStr.StartsWith(MountRoot, ESearchCase::IgnoreCase)
-		|| InternalStr.Equals(MountRoot, ESearchCase::IgnoreCase);
+	const bool bIsUnderOrAtMount  = FPathViews::IsParentPathOf(MountRoot, InternalStr);
 	const bool bIsAncestorOfMount = !bIsUnderOrAtMount
-		&& MountRoot.StartsWith(InternalStr + TEXT("/"), ESearchCase::IgnoreCase);
+		&& FPathViews::IsParentPathOf(InternalStr, MountRoot);
 	if (!bIsUnderOrAtMount && !bIsAncestorOfMount)
 	{
 		return;
