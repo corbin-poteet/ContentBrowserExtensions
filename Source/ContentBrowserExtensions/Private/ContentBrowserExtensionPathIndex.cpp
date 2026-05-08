@@ -1,17 +1,17 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ContentBrowserExtensionPathIndex.h"
-#include "ContentBrowserExtensionsSanitize.h"
+#include "ContentBrowserExtensionsStatics.h"
 
 // ---------------------------------------------------------------------------
 // FContentBrowserExtensionPathIndex
 // ---------------------------------------------------------------------------
 
-void FContentBrowserExtensionPathIndex::BuildFromFlatList(const FString& InMountRoot, const TArray<FContentBrowserExtensionAssetEntry>& FlatList)
+void FContentBrowserExtensionPathIndex::BuildFromFlatList(const FString& InMountRoot, const TArray<FContentBrowserExtensionAssetEntry>& FlatList, bool bSanitizePathNames)
 {
 	// Derive (PathName, DisplayName) segments by sanitizing the input and pairing each
 	// sanitized segment with its original form, then delegate to the structured overload.
-	const FString Sanitized = UE::ContentBrowserExtensions::SanitizeForPackagePath(InMountRoot);
+	const FString Sanitized = UContentBrowserExtensionsStatics::SanitizeForPackagePath(InMountRoot);
 
 	TArray<FString> OrigSegments;
 	TArray<FString> SanitizedSegments;
@@ -30,7 +30,7 @@ void FContentBrowserExtensionPathIndex::BuildFromFlatList(const FString& InMount
 		{
 			continue;
 		}
-		Segments.Emplace(SanitizedSegments[i], OrigSegments[i]);
+		Segments.Emplace(SanitizedSegments[i], OrigSegments[i], bSanitizePathNames);
 	}
 
 	BuildFromFolderSegments(Segments, FlatList);

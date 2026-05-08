@@ -2,7 +2,7 @@
 
 #include "ContentBrowserExtensionsSubsystem.h"
 #include "ContentBrowserExtensionDataSource.h"
-#include "ContentBrowserExtensionsSanitize.h"
+#include "ContentBrowserExtensionsStatics.h"
 #include "ContentBrowserExtensionsModule.h"
 #include "IContentBrowserDataModule.h"
 #include "ContentBrowserDataSubsystem.h"
@@ -88,7 +88,7 @@ ERegisterResult UContentBrowserExtensionsSubsystem::RegisterDataSource(
 		return ERegisterResult::InvalidArguments;
 	}
 
-	const FString Sanitized = UE::ContentBrowserExtensions::SanitizeForPackagePath(InVirtualRootPath);
+	const FString Sanitized = UContentBrowserExtensionsStatics::SanitizeForPackagePath(InVirtualRootPath);
 
 	if (FRegistration* Existing = RegisteredByPath.Find(Sanitized))
 	{

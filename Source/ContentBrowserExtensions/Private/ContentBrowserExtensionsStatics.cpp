@@ -1,13 +1,10 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "ContentBrowserExtensionsSanitize.h"
+#include "ContentBrowserExtensionsStatics.h"
 #include "ContentBrowserExtensionsModule.h"
 
-// ---------------------------------------------------------------------------
-// SanitizeForPackagePath
-// ---------------------------------------------------------------------------
 
-FString UE::ContentBrowserExtensions::SanitizeForPackagePath(const FString& InPath)
+FString UContentBrowserExtensionsStatics::SanitizeForPackagePath(const FString& InPath)
 {
 	if (InPath.IsEmpty())
 	{
@@ -133,4 +130,14 @@ FString UE::ContentBrowserExtensions::SanitizeForPackagePath(const FString& InPa
 	}
 
 	return FString::Join(NonEmpty, TEXT("/"));
+}
+
+FString UContentBrowserExtensionsStatics::SanitizeSegment(const FString& InSegment)
+{
+	FString Sanitized = UContentBrowserExtensionsStatics::SanitizeForPackagePath(FString(TEXT("/")) + InSegment);
+	if (Sanitized.StartsWith(TEXT("/")))
+	{
+		Sanitized.RemoveAt(0);
+	}
+	return Sanitized;
 }

@@ -6,7 +6,7 @@
 #include "Misc/AutomationTest.h"
 #include "ContentBrowserExtensionAssetEntry.h"
 #include "ContentBrowserExtensionPathIndex.h"
-#include "ContentBrowserExtensionsSanitize.h"
+#include "ContentBrowserExtensionsStatics.h"
 
 DEFINE_SPEC(FContentBrowserExtensionsPathIndexSpec, "ContentBrowserExtensions.PathIndex",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -57,37 +57,37 @@ void FContentBrowserExtensionsPathIndexSpec::Define()
 	{
 		It("preserves leading slash", [this]()
 		{
-			FString R = UE::ContentBrowserExtensions::SanitizeForPackagePath(TEXT("/x"));
+			FString R = UContentBrowserExtensionsStatics::SanitizeForPackagePath(TEXT("/x"));
 			TestTrue(TEXT("starts with /"), R.StartsWith(TEXT("/")));
 		});
 
 		It("PascalCases space-separated words: 'Star Wars II' -> 'StarWarsII'", [this]()
 		{
-			FString R = UE::ContentBrowserExtensions::SanitizeForPackagePath(TEXT("/Star Wars II"));
+			FString R = UContentBrowserExtensionsStatics::SanitizeForPackagePath(TEXT("/Star Wars II"));
 			TestEqual(TEXT("Sanitized"), R, FString(TEXT("/StarWarsII")));
 		});
 
 		It("preserves short all-uppercase tokens (II, IV)", [this]()
 		{
-			TestEqual(TEXT("II preserved"), UE::ContentBrowserExtensions::SanitizeForPackagePath(TEXT("/II")), FString(TEXT("/II")));
-			TestEqual(TEXT("IV preserved"), UE::ContentBrowserExtensions::SanitizeForPackagePath(TEXT("/IV")), FString(TEXT("/IV")));
+			TestEqual(TEXT("II preserved"), UContentBrowserExtensionsStatics::SanitizeForPackagePath(TEXT("/II")), FString(TEXT("/II")));
+			TestEqual(TEXT("IV preserved"), UContentBrowserExtensionsStatics::SanitizeForPackagePath(TEXT("/IV")), FString(TEXT("/IV")));
 		});
 
 		It("strips parens, TM, R, C marks", [this]()
 		{
-			FString R = UE::ContentBrowserExtensions::SanitizeForPackagePath(TEXT("/Foo(Bar)"));
+			FString R = UContentBrowserExtensionsStatics::SanitizeForPackagePath(TEXT("/Foo(Bar)"));
 			TestFalse(TEXT("no parens"), R.Contains(TEXT("(")) || R.Contains(TEXT(")")));
 		});
 
 		It("preserves underscore, hyphen, dot in segments", [this]()
 		{
-			FString R = UE::ContentBrowserExtensions::SanitizeForPackagePath(TEXT("/foo_bar-baz.qux"));
+			FString R = UContentBrowserExtensionsStatics::SanitizeForPackagePath(TEXT("/foo_bar-baz.qux"));
 			TestTrue(TEXT("contains _-."), R.Contains(TEXT("_")) && R.Contains(TEXT("-")) && R.Contains(TEXT(".")));
 		});
 
 		It("preserves forward slashes between segments", [this]()
 		{
-			FString R = UE::ContentBrowserExtensions::SanitizeForPackagePath(TEXT("/A/B/C"));
+			FString R = UContentBrowserExtensionsStatics::SanitizeForPackagePath(TEXT("/A/B/C"));
 			int32 SlashCount = 0;
 			for (TCHAR Ch : R) { if (Ch == TEXT('/')) ++SlashCount; }
 			TestEqual(TEXT("3 slashes"), SlashCount, 3);

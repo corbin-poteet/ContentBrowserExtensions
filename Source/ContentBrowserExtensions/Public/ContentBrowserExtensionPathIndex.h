@@ -87,8 +87,12 @@ struct CONTENTBROWSEREXTENSIONS_API FContentBrowserExtensionPathIndex
 	 * @param InMountRoot  The virtual mount root (e.g. "/My Folder/My Game" or "/MyTool/MyData").
 	 *                     Consumer-supplied; plugin hardcodes nothing.
 	 * @param FlatList     Flat array of {Path, Type} entries.
+	 * @param bSanitizePathNames   When true (default), runs InPathName through
+	 *                            SanitizeForPackagePath before storing. Pass false to
+	 *                            skip sanitization when the caller knows the input is
+	 *                            already a valid path-form segment.
 	 */
-	void BuildFromFlatList(const FString& InMountRoot, const TArray<FContentBrowserExtensionAssetEntry>& FlatList);
+	void BuildFromFlatList(const FString& InMountRoot, const TArray<FContentBrowserExtensionAssetEntry>& FlatList, bool bSanitizePathNames = true);
 
 	/**
 	 * Build the index from a structured array of mount-root segments — preferred form.

@@ -52,8 +52,12 @@ struct FContentBrowserExtensionFolderSegment
 	 * when called with TEXT() literals — wchar_t* implicitly converts to bool.)
 	 *
 	 * @param InPathName  Path string to use as both PathName and DisplayName.
+	 * @param bSanitizePathName   When true, runs InPathName through
+	 *                            SanitizeForPackagePath before storing. Pass false to
+	 *                            skip sanitization when the caller knows the input is
+	 *                            already a valid path-form segment.
 	 */
-	CONTENTBROWSEREXTENSIONS_API explicit FContentBrowserExtensionFolderSegment(const FString& InPathName);
+	CONTENTBROWSEREXTENSIONS_API explicit FContentBrowserExtensionFolderSegment(const FString& InPathName, bool bSanitizePathName);
 
 	/**
 	 * Explicit (PathName, DisplayName) constructor. PathName is sanitized via
@@ -67,10 +71,10 @@ struct FContentBrowserExtensionFolderSegment
 	 *
 	 * @param InPathName          Path-form segment (alphanumeric + ._-, no spaces).
 	 * @param InDisplayName       Display-form segment shown in the CB tree.
-	 * @param bSanitizePathName   When true (default), runs InPathName through
+	 * @param bSanitizePathName   When true, runs InPathName through
 	 *                            SanitizeForPackagePath before storing. Pass false to
 	 *                            skip sanitization when the caller knows the input is
 	 *                            already a valid path-form segment.
 	 */
-	CONTENTBROWSEREXTENSIONS_API FContentBrowserExtensionFolderSegment(const FString& InPathName, const FString& InDisplayName, bool bSanitizePathName = true);
+	CONTENTBROWSEREXTENSIONS_API explicit FContentBrowserExtensionFolderSegment(const FString& InPathName, const FString& InDisplayName, bool bSanitizePathName);
 };

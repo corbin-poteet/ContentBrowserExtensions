@@ -3,9 +3,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Kismet/BlueprintFunctionLibrary.h"
+#include "ContentBrowserExtensionsStatics.generated.h"
 
-namespace UE::ContentBrowserExtensions
+UCLASS()
+class CONTENTBROWSEREXTENSIONS_API UContentBrowserExtensionsStatics : public UBlueprintFunctionLibrary
 {
+	GENERATED_BODY()
+
+public:
 	/**
 	 * Default sanitizer — produces a UE package-name-safe path.
 	 *
@@ -32,5 +38,18 @@ namespace UE::ContentBrowserExtensions
 	 * @param InPath Input path or path segment (e.g. "/My Folder/Star Wars II").
 	 * @return Sanitized path (e.g. "/MyFolder/StarWarsII").
 	 */
-	CONTENTBROWSEREXTENSIONS_API FString SanitizeForPackagePath(const FString& InPath);
-}
+	UFUNCTION(BlueprintCallable, Category = "Content Browser Extensions")
+	static FString SanitizeForPackagePath(const FString& InPath);
+
+
+	/**
+	 * Sanitize a single folder-segment string by wrapping in a leading slash (so the
+	 * path-aware SanitizeForPackagePath treats the input as a one-segment path),
+	 * running the sanitizer, then stripping the slash back off.
+	 *
+	 * Idempotent: passing an already-sanitized PathName through this returns the
+	 * same string unchanged (mixed-case identifiers are preserved by the sanitizer).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Content Browser Extensions")
+	static FString SanitizeSegment(const FString& InSegment);
+};
