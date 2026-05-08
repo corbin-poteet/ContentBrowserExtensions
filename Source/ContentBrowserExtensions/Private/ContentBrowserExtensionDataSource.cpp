@@ -144,6 +144,9 @@ void UContentBrowserExtensionDataSource::GetLeafAssetsUnderFolder(
 {
 	const FString FolderDir = InternalFolderPath.ToString();
 
+	// F16: pre-size to the upper bound so the per-iteration Add doesn't re-grow the array.
+	OutEntries.Reserve(OutEntries.Num() + PathIndex.LeafItems.Num());
+
 	for (const auto& [LeafPath, Entry] : PathIndex.LeafItems)
 	{
 		const FString LeafStr = LeafPath.ToString();
@@ -190,7 +193,10 @@ void UContentBrowserExtensionDataSource::BuildRootPathVirtualTree()
 				{
 					return false; // stop before emitting Mount itself
 				}
-				RootPathAdded(FString(Accumulated));
+				// F1: pass FStringView through directly (UContentBrowserDataSource::RootPathAdded
+				// is declared `void RootPathAdded(const FStringView InInternalPath)` —
+				// see ContentBrowserDataSource.h:941). No FString round-trip needed.
+				RootPathAdded(Accumulated);
 				return true;
 			});
 

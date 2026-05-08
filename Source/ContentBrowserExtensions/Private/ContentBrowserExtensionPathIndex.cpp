@@ -197,7 +197,12 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 		FullPathBuilder << MountRoot;
 		FPathViews::Append(FullPathBuilder, Entry.Path);
 		FString FullPath(FullPathBuilder);
-		FName LeafName(*FullPath);
+		// F2: build LeafName directly from the builder's FStringView (FName has an FStringView
+		// ctor — see UObject/NameTypes.h). Saves the redundant `*FullPath` C-string deref now
+		// that the builder is the canonical source of the path content. Uses .ToView() (rather
+		// than `FStringView(FullPathBuilder)` direct-init) to avoid the most-vexing-parse where
+		// the parens-form of the temporary makes the line parse as a function declaration.
+		FName LeafName(FullPathBuilder.ToView());
 
 		// Add the leaf item (last entry wins for duplicates)
 		LeafItems.Add(LeafName, Entry);
