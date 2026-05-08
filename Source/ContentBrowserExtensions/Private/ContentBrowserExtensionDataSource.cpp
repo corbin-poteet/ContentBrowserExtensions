@@ -12,6 +12,8 @@
 #include "Editor.h"
 #include "Internationalization/Text.h"
 #include "Misc/Paths.h"
+#include "Misc/PathViews.h"
+#include "Misc/StringBuilder.h"
 
 #define LOCTEXT_NAMESPACE "UContentBrowserExtensionDataSource"
 
@@ -593,10 +595,7 @@ FContentBrowserItemData UContentBrowserExtensionDataSource::MakeFolderItem(FName
 
 	// Extract the leaf name (last path segment) from the virtual path.
 	FString PathStr = VirtualPath.ToString();
-	int32 LastSlash;
-	FString LeafStr = PathStr.FindLastChar(TEXT('/'), LastSlash)
-		? PathStr.RightChop(LastSlash + 1)
-		: PathStr;
+	FString LeafStr(FPathViews::GetPathLeaf(PathStr));
 	FName LeafName(*LeafStr);
 
 	// Check DisplayNameMap for an original (unsanitized) display name, or for a
@@ -642,10 +641,7 @@ FContentBrowserItemData UContentBrowserExtensionDataSource::MakeFileItem(
 	// (e.g. if a folder "art_exterior" and a leaf "Art_Exterior" share a case-insensitive
 	// FName key, ToString() can return either one's casing). Entry.Path carries the original
 	// casing as supplied by the consumer and is the authoritative source for leaf names.
-	int32 LastSlash;
-	FString LeafStr = Entry.Path.FindLastChar(TEXT('/'), LastSlash)
-		? Entry.Path.RightChop(LastSlash + 1)
-		: Entry.Path;
+	FString LeafStr(FPathViews::GetPathLeaf(Entry.Path));
 	FName LeafName(*LeafStr);
 
 	return FContentBrowserItemData(

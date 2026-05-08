@@ -3,6 +3,9 @@
 #include "ContentBrowserExtensionPathIndex.h"
 #include "ContentBrowserExtensionsStatics.h"
 
+#include "Misc/PathViews.h"
+#include "Misc/StringBuilder.h"
+
 // ---------------------------------------------------------------------------
 // FContentBrowserExtensionPathIndex
 // ---------------------------------------------------------------------------
@@ -47,7 +50,15 @@ void FContentBrowserExtensionPathIndex::BuildFromFolderSegments(
 	// Trust the consumer's PathName values verbatim — no sanitizer applied here. (Use
 	// FContentBrowserExtensionFolderSegment::FromDisplayName at the consumer call site if
 	// you want the plugin's default sanitizer to derive PathName from DisplayName.)
-	FString RunningPath;
+	//
+	// Use TStringBuilder + FPathViews::Append for the join. We track whether any segment
+	// was actually emitted so that an empty/all-empty segment list yields MountRoot="" —
+	// matching the original `RunningPath += TEXT("/"); RunningPath += Seg.PathName;` behavior.
+	// (FPathViews::Append handles separator dedup: when the builder ends in '/', no extra
+	// separator is added; otherwise it inserts one before the appended segment. We seed
+	// with a leading "/" only after the first non-empty segment is observed.)
+	TStringBuilder<128> RunningBuilder;
+	bool bAnyEmitted = false;
 	for (const FContentBrowserExtensionFolderSegment& Seg : InMountRootSegments)
 	{
 		if (Seg.PathName.IsEmpty())
@@ -55,16 +66,21 @@ void FContentBrowserExtensionPathIndex::BuildFromFolderSegments(
 			continue;
 		}
 
-		RunningPath += TEXT("/");
-		RunningPath += Seg.PathName;
+		if (!bAnyEmitted)
+		{
+			RunningBuilder.AppendChar(TEXT('/'));
+			bAnyEmitted = true;
+		}
+
+		FPathViews::Append(RunningBuilder, Seg.PathName);
 
 		if (!Seg.DisplayName.IsEmpty() && !Seg.DisplayName.Equals(Seg.PathName, ESearchCase::CaseSensitive))
 		{
-			DisplayNameMap.Add(FName(*RunningPath), Seg.DisplayName);
+			DisplayNameMap.Add(FName(RunningBuilder.ToView()), Seg.DisplayName);
 		}
 	}
 
-	MountRoot = MoveTemp(RunningPath);
+	MountRoot = FString(RunningBuilder);
 
 	FName MountRootName(*MountRoot);
 
@@ -102,16 +118,21 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 
 		for (const FContentBrowserExtensionAssetEntry& Entry : FlatList)
 		{
-			FString FullPath = MountRoot + TEXT("/") + Entry.Path;
+			TStringBuilder<256> FullPathBuilder;
+			FullPathBuilder << MountRoot;
+			FPathViews::Append(FullPathBuilder, Entry.Path);
+			FString FullPath(FullPathBuilder);
 
 			// Start from the PARENT of FullPath, not FullPath itself.
 			// This excludes the leaf asset path from contaminating the folder FName table.
-			int32 InitialLastSlash;
-			if (!FullPath.FindLastChar(TEXT('/'), InitialLastSlash) || InitialLastSlash == 0)
+			// FPathViews::GetPath returns "" when no slash is present, matching the
+			// short-circuit semantics of the original FindLastChar/Left pair (which used
+			// `LastSlash == 0` to fall through to `continue`).
+			FString CurrentPath(FPathViews::GetPath(FullPath));
+			if (CurrentPath.IsEmpty())
 			{
 				continue;
 			}
-			FString CurrentPath = FullPath.Left(InitialLastSlash);
 			if (CurrentPath.Len() <= MountRoot.Len())
 			{
 				continue;
@@ -134,12 +155,15 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 					BestFullPath.Add(Lower, CurrentPath);
 				}
 
-				int32 LastSlash;
-				if (!CurrentPath.FindLastChar(TEXT('/'), LastSlash) || LastSlash == 0)
+				// FPathViews::GetPath returns "" when no slash is present, AND also when the
+				// only slash is the leading one (e.g. "/foo" → ""). This matches the original
+				// `FindLastChar(...) || LastSlash == 0 → break` semantics.
+				FString ParentOfCurrent(FPathViews::GetPath(CurrentPath));
+				if (ParentOfCurrent.IsEmpty())
 				{
 					break;
 				}
-				CurrentPath = CurrentPath.Left(LastSlash);
+				CurrentPath = MoveTemp(ParentOfCurrent);
 				if (CurrentPath.Len() <= MountRoot.Len()) { break; }
 			}
 		}
@@ -168,7 +192,10 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 	for (const FContentBrowserExtensionAssetEntry& Entry : FlatList)
 	{
 		// Build full path preserving original case from the asset entry
-		FString FullPath = MountRoot + TEXT("/") + Entry.Path;
+		TStringBuilder<256> FullPathBuilder;
+		FullPathBuilder << MountRoot;
+		FPathViews::Append(FullPathBuilder, Entry.Path);
+		FString FullPath(FullPathBuilder);
 		FName LeafName(*FullPath);
 
 		// Add the leaf item (last entry wins for duplicates)
@@ -186,13 +213,14 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 		// First iteration: establish parent/child relationship for the leaf, but do NOT
 		// add the leaf's own segment to BestSegmentName.
 		{
-			int32 LastSlash;
-			if (!CurrentPath.FindLastChar(TEXT('/'), LastSlash))
+			// FPathViews::GetPath returns "" when no slash is present — matches the
+			// original FindLastChar early-exit path.
+			ParentPath = FString(FPathViews::GetPath(CurrentPath));
+			if (ParentPath.IsEmpty())
 			{
 				continue;
 			}
 
-			ParentPath = CurrentPath.Left(LastSlash);
 			FName ParentName(*ParentPath);
 			FName ChildName(*CurrentPath);
 
@@ -217,13 +245,14 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 		// Subsequent iterations: walk ancestor folders, tracking best casing for each.
 		while (true)
 		{
-			int32 LastSlash;
-			if (!CurrentPath.FindLastChar(TEXT('/'), LastSlash))
+			// FPathViews::GetPath returns "" when no slash is present — matches the original
+			// FindLastChar early-break path.
+			ParentPath = FString(FPathViews::GetPath(CurrentPath));
+			if (ParentPath.IsEmpty())
 			{
 				break;
 			}
 
-			ParentPath = CurrentPath.Left(LastSlash);
 			FName ParentName(*ParentPath);
 			FName ChildName(*CurrentPath);
 
@@ -239,7 +268,7 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 			// A segment is "better" if it contains uppercase characters while the
 			// currently stored best is all-lowercase.
 			{
-				FString CurrentSegment = CurrentPath.RightChop(LastSlash + 1);
+				FString CurrentSegment(FPathViews::GetPathLeaf(CurrentPath));
 				FString CurrentPathLower = CurrentPath.ToLower();
 				FString* ExistingBest = BestSegmentName.Find(CurrentPathLower);
 				if (!ExistingBest)
@@ -280,10 +309,7 @@ void FContentBrowserExtensionPathIndex::IndexAssetEntries(const TArray<FContentB
 		FString StoredDisplay = InternalName.ToString();
 
 		// Extract the leaf segment of the stored display string for comparison.
-		int32 LastSlashInStored;
-		FString StoredSegment = StoredDisplay.FindLastChar(TEXT('/'), LastSlashInStored)
-			? StoredDisplay.RightChop(LastSlashInStored + 1)
-			: StoredDisplay;
+		FString StoredSegment(FPathViews::GetPathLeaf(StoredDisplay));
 
 		if (!StoredSegment.Equals(BestSegment, ESearchCase::CaseSensitive))
 		{
