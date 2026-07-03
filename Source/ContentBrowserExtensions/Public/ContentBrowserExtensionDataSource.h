@@ -118,6 +118,27 @@ public:
 	/** Returns the sanitized mount root path (e.g. "/MyTool/MyData"). */
 	const FString& GetMountRoot() const { return PathIndex.MountRoot; }
 
+	/**
+	 * Override the DISPLAY name shown for a leaf (file) item without altering the item's
+	 * identity FName or its underlying Entry.Path — both remain load-bearing lookup keys
+	 * (metadata lookup, import name-recovery, copy-path). This changes ONLY the FText the
+	 * Content Browser renders for the item.
+	 *
+	 * The override is keyed on the leaf's full internal path, rebuilt here exactly the way
+	 * IndexAssetEntries builds it (MountRoot + Append(Entry.Path)), so callers pass the same
+	 * relative Entry.Path they registered via InitializeWithAssets. MakeFileItem consults
+	 * DisplayNameMap for this override — symmetric with how MakeFolderItem already honors
+	 * DisplayNameMap for folder casing.
+	 *
+	 * Consumer-facing seam (D-04): the plugin never derives display names itself; a consumer
+	 * (e.g. Frosty) decides the human-readable form and seeds it here. No-op when the mount
+	 * root has not been built yet or the inputs are empty.
+	 *
+	 * @param InRelativeEntryPath  Entry.Path as registered (e.g. "_blendspaces/Foo.BS").
+	 * @param InDisplayName        Human-readable leaf display (e.g. "Foo_BS").
+	 */
+	CONTENTBROWSEREXTENSIONS_API void SetLeafDisplayNameOverride(const FString& InRelativeEntryPath, const FString& InDisplayName);
+
 	// ~UContentBrowserDataSource interface
 	// CONTENTBROWSEREXTENSIONS_API per-method tags required so consumer subclasses
 	// (e.g. UFrostyContentBrowserDataSource) can link against the vtable entries

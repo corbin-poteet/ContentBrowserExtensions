@@ -714,15 +714,42 @@ FContentBrowserItemData UContentBrowserExtensionDataSource::MakeFileItem(
 	FString LeafStr(FPathViews::GetPathLeaf(Entry.Path));
 	FName LeafName(*LeafStr);
 
+	// Consult DisplayNameMap for a consumer-seeded DISPLAY override (symmetric with
+	// MakeFolderItem). This changes ONLY the display FText; the identity FName (LeafName)
+	// and Entry.Path stay untouched so metadata lookup / import name-recovery / copy-path
+	// keep matching. Leaf paths are never auto-seeded by IndexAssetEntries (it seeds only
+	// ancestor folders), so this is a no-op unless a consumer called SetLeafDisplayNameOverride.
+	FString DisplayStr = LeafStr;
+	if (const FString* MappedName = PathIndex.DisplayNameMap.Find(InternalPath))
+	{
+		DisplayStr = *MappedName;
+	}
+
 	return FContentBrowserItemData(
 		this,
 		EContentBrowserItemFlags::Type_File | EContentBrowserItemFlags::Category_Misc,
 		VirtualPath,
 		LeafName,
-		FText::FromString(LeafStr),
+		FText::FromString(DisplayStr),
 		MakeShared<FContentBrowserExtensionFileItemPayload>(Entry),
 		InternalPath
 	);
+}
+
+void UContentBrowserExtensionDataSource::SetLeafDisplayNameOverride(
+	const FString& InRelativeEntryPath, const FString& InDisplayName)
+{
+	if (PathIndex.MountRoot.IsEmpty() || InRelativeEntryPath.IsEmpty())
+	{
+		return;
+	}
+
+	// Rebuild the leaf's full internal path exactly as IndexAssetEntries does
+	// (MountRoot + Append(Entry.Path)) so the key matches the FName MakeFileItem receives.
+	TStringBuilder<256> FullPathBuilder;
+	FullPathBuilder << PathIndex.MountRoot;
+	FPathViews::Append(FullPathBuilder, InRelativeEntryPath);
+	PathIndex.DisplayNameMap.Add(FName(FullPathBuilder.ToView()), InDisplayName);
 }
 
 const FContentBrowserExtensionFileItemPayload* UContentBrowserExtensionDataSource::GetFilePayload(
